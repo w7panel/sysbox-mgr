@@ -28,17 +28,13 @@
 package volMgr
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/nestybox/sysbox-libs/formatter"
-	"github.com/nestybox/sysbox-libs/idShiftUtils"
 	mount "github.com/nestybox/sysbox-libs/mount"
 	overlayUtils "github.com/nestybox/sysbox-libs/overlayUtils"
 	utils "github.com/nestybox/sysbox-libs/utils"
@@ -281,88 +277,6 @@ func (m *vmgr) SyncOutAndDestroyAll() {
 				m.name, formatter.ContainerID{id}, err)
 		}
 	}
-}
-
-// rsyncVol performs an rsync from src to dest. If shiftUids is true, it also
-// performs filesystem user-ID and group-ID shifting (via chown) using an
-// offset specified via uid and gid.
-//
-// Note that depending no how much data is transferred, this operation can
-// result in many file descriptors being opened by rsync, which the kernel may
-// account to sysbox-mgr. Thus, the file open limit for sysbox-mgr should be
-// very high / unlimited since the number of open files depends on how much data
-// there is to copy and how many containers are active at a given time.
-func (m *vmgr) rsyncVol(src, dest string, uid, gid uint32, shiftUids bool, shiftT shiftType) error {
-
-	var cmd *exec.Cmd
-	var output bytes.Buffer
-	var usermap, groupmap string
-
-	if shiftUids {
-		srcUidList, srcGidList, err := idShiftUtils.GetDirIDs(src)
-		if err != nil {
-			return fmt.Errorf("failed to get user and group IDs for %s: %s", src, err)
-		}
-
-		// Get the usermap and groupmap options to pass to rsync
-		usermap = rsyncIdMapOpt(srcUidList, uid, shiftT)
-		groupmap = rsyncIdMapOpt(srcGidList, gid, shiftT)
-
-		if usermap != "" {
-			usermap = "--usermap=" + usermap
-		}
-
-		if groupmap != "" {
-			groupmap = "--groupmap=" + groupmap
-		}
-	}
-
-	// Note: rsync uses file modification time and size to determine if a sync is
-	// needed. This should be fine for sync'ing the sys container's directories,
-	// assuming the probability of files being different yet having the same size &
-	// timestamp is low. If this assumption changes we could pass the `--checksum` option
-	// to rsync, but this will slow the copy operation significantly.
-	srcDir := src + "/"
-
-	if usermap == "" && groupmap == "" {
-		cmd = exec.Command("rsync", "-rauqlH", "--no-devices", "--delete", srcDir, dest)
-	} else if usermap != "" && groupmap == "" {
-		cmd = exec.Command("rsync", "-rauqlH", "--no-devices", "--delete", usermap, srcDir, dest)
-	} else if usermap == "" && groupmap != "" {
-		cmd = exec.Command("rsync", "-rauqlH", "--no-devices", "--delete", groupmap, srcDir, dest)
-	} else {
-		cmd = exec.Command("rsync", "-rauqlH", "--no-devices", "--delete", usermap, groupmap, srcDir, dest)
-	}
-
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("rsync %s to %s: %v %v", srcDir, dest, string(output.Bytes()), err)
-	}
-
-	return nil
-}
-
-func rsyncIdMapOpt(idList []uint32, offset uint32, shiftT shiftType) string {
-	var destId uint32
-
-	mapOpt := ""
-	for _, srcId := range idList {
-		if shiftT == shiftUp {
-			destId = srcId + offset
-		} else {
-			destId = srcId - offset
-		}
-		mapOpt += fmt.Sprintf("%d:%d,", srcId, destId)
-	}
-
-	if mapOpt != "" {
-		mapOpt = strings.TrimSuffix(mapOpt, ",")
-	}
-
-	return mapOpt
 }
 
 func dirIsEmpty(name string) (bool, error) {
