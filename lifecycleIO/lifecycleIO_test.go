@@ -18,6 +18,7 @@ package lifecycleIO
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -96,5 +97,75 @@ func TestLimiterRunRecordsFailures(t *testing.T) {
 	}
 	if stats.Chown.LastError != "boom" {
 		t.Fatalf("last chown error = %q, want %q", stats.Chown.LastError, "boom")
+	}
+}
+
+func TestNewLimiterNormalizesInvalidLimit(t *testing.T) {
+	// Given
+	limiter := NewLimiter(0)
+
+	// When
+	err := limiter.Run(OperationRsync, "/tmp/src", func() error { return nil })
+
+	// Then
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+}
+
+func TestLimiterStatsKeepPerOperationQueues(t *testing.T) {
+	// Given
+	limiter := NewLimiter(1)
+	release := make(chan struct{})
+	rsyncStarted := make(chan struct{})
+	chownDone := make(chan struct{})
+
+	go func() {
+		_ = limiter.Run(OperationRsync, "/tmp/src", func() error {
+			close(rsyncStarted)
+			<-release
+			return nil
+		})
+	}()
+	<-rsyncStarted
+
+	// When
+	go func() {
+		_ = limiter.Run(OperationChown, "/tmp/tree", func() error { return nil })
+		close(chownDone)
+	}()
+
+	for {
+		stats := limiter.Stats()
+		if stats.Chown.MaxObservedQueue == 1 {
+			if stats.Rsync.MaxObservedQueue != 1 {
+				t.Fatalf("rsync max queue = %d, want 1", stats.Rsync.MaxObservedQueue)
+			}
+			close(release)
+			<-chownDone
+			return
+		}
+	}
+}
+
+func TestStatsStringExposesOperationMetrics(t *testing.T) {
+	// Given
+	limiter := NewLimiter(1)
+	_ = limiter.Run(OperationRsync, "/tmp/src", func() error { return nil })
+	_ = limiter.Run(OperationChown, "/tmp/tree", func() error { return errors.New("boom") })
+
+	// When
+	snapshot := limiter.Stats().String()
+
+	// Then
+	for _, want := range []string{
+		"rsync started=1 succeeded=1 failed=0",
+		"chown started=1 succeeded=0 failed=1",
+		"last_target=/tmp/tree",
+		"last_error=boom",
+	} {
+		if !strings.Contains(snapshot, want) {
+			t.Fatalf("stats snapshot %q does not contain %q", snapshot, want)
+		}
 	}
 }

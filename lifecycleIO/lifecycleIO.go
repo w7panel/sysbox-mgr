@@ -17,6 +17,7 @@
 package lifecycleIO
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -35,6 +36,7 @@ type OpStats struct {
 	Started          uint64
 	Succeeded        uint64
 	Failed           uint64
+	InQueue          int
 	LastDuration     time.Duration
 	TotalDuration    time.Duration
 	LastTarget       string
@@ -50,12 +52,14 @@ type Stats struct {
 type Limiter struct {
 	slots chan struct{}
 
-	mu      sync.Mutex
-	inQueue int
-	stats   Stats
+	mu    sync.Mutex
+	stats Stats
 }
 
 func NewLimiter(limit int) *Limiter {
+	if limit < 1 {
+		limit = 1
+	}
 	return &Limiter{slots: make(chan struct{}, limit)}
 }
 
@@ -80,14 +84,23 @@ func (l *Limiter) Stats() Stats {
 	return l.stats
 }
 
+func (s Stats) String() string {
+	return fmt.Sprintf("rsync %s; chown %s", s.Rsync.String(), s.Chown.String())
+}
+
+func (s OpStats) String() string {
+	return fmt.Sprintf("started=%d succeeded=%d failed=%d in_queue=%d max_queue=%d last_duration=%s total_duration=%s last_target=%s last_error=%s",
+		s.Started, s.Succeeded, s.Failed, s.InQueue, s.MaxObservedQueue, s.LastDuration, s.TotalDuration, s.LastTarget, s.LastError)
+}
+
 func (l *Limiter) recordQueued(op Operation) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.inQueue++
 	stats := l.opStats(op)
-	if l.inQueue > stats.MaxObservedQueue {
-		stats.MaxObservedQueue = l.inQueue
+	stats.InQueue++
+	if stats.InQueue > stats.MaxObservedQueue {
+		stats.MaxObservedQueue = stats.InQueue
 	}
 	l.setOpStats(op, stats)
 }
@@ -96,8 +109,8 @@ func (l *Limiter) recordStarted(op Operation, target string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.inQueue--
 	stats := l.opStats(op)
+	stats.InQueue--
 	stats.Started++
 	stats.LastTarget = target
 	l.setOpStats(op, stats)

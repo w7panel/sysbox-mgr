@@ -19,10 +19,13 @@ package main
 import (
 	"github.com/nestybox/sysbox-libs/idShiftUtils"
 	"github.com/nestybox/sysbox-mgr/lifecycleIO"
+	"github.com/sirupsen/logrus"
 )
 
 func (mgr *SysboxMgr) shiftIdsWithChown(path string, uidOffset, gidOffset int32) error {
-	return lifecycleIO.Default.Run(lifecycleIO.OperationChown, path, func() error {
+	err := lifecycleIO.Default.Run(lifecycleIO.OperationChown, path, func() error {
 		return idShiftUtils.ShiftIdsWithChown(path, uidOffset, gidOffset)
 	})
+	logrus.Debugf("lifecycle IO stats: %s", lifecycleIO.Default.Stats())
+	return err
 }

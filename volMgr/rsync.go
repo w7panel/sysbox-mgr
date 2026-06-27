@@ -24,6 +24,7 @@ import (
 
 	"github.com/nestybox/sysbox-libs/idShiftUtils"
 	"github.com/nestybox/sysbox-mgr/lifecycleIO"
+	"github.com/sirupsen/logrus"
 )
 
 func (m *vmgr) rsyncVol(src, dest string, uid, gid uint32, shiftUids bool, shiftT shiftType) error {
@@ -63,6 +64,7 @@ func (m *vmgr) rsyncVol(src, dest string, uid, gid uint32, shiftUids bool, shift
 	cmd.Stderr = &output
 
 	err := lifecycleIO.Default.Run(lifecycleIO.OperationRsync, dest, cmd.Run)
+	logrus.Debugf("lifecycle IO stats: %s", lifecycleIO.Default.Stats())
 	if err != nil {
 		return fmt.Errorf("rsync %s to %s: %v %v", srcDir, dest, string(output.Bytes()), err)
 	}
