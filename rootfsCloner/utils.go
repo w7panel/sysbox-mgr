@@ -26,8 +26,6 @@ import (
 	"github.com/nestybox/sysbox-libs/mount"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
-
-	sh "github.com/nestybox/sysbox-libs/idShiftUtils"
 )
 
 func createNewOvfsDir(info ovfsMntInfo) error {
@@ -378,7 +376,7 @@ func doChown(ci *cloneInfo, uidOffset, gidOffset int32) error {
 	}
 
 	// chown the bottom ovfs mount (fast because metacopy=on is set on it)
-	if err := sh.ShiftIdsWithChown(ci.ovfsMount.mergedDir, uidOffset, gidOffset); err != nil {
+	if err := shiftIdsWithChown(ci.ovfsMount.mergedDir, uidOffset, gidOffset); err != nil {
 		return fmt.Errorf("failed to chown cloned rootfs bottom mount at %s by offset %d, %d: %s",
 			ci.ovfsMount.mergedDir, uidOffset, gidOffset, err)
 	}

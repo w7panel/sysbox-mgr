@@ -735,7 +735,7 @@ func (mgr *SysboxMgr) unregister(id string) error {
 		logrus.Infof("unregister %s: chown rootfs overlayfs upper layer at %s (%d -> %d)",
 			formatter.ContainerID{id}, info.rootfsOvfsUpper, info.uidMappings[0].HostID, 0)
 
-		if err := idShiftUtils.ShiftIdsWithChown(info.rootfsOvfsUpper, uidOffset, gidOffset); err != nil {
+		if err := mgr.shiftIdsWithChown(info.rootfsOvfsUpper, uidOffset, gidOffset); err != nil {
 			return err
 		}
 		info.rootfsOvfsUpperChowned = false
@@ -750,7 +750,7 @@ func (mgr *SysboxMgr) unregister(id string) error {
 
 			logrus.Infof("reverting uid-shift on %s for %s (%d -> %d)", revInfo.path, formatter.ContainerID{id}, revInfo.targetUid, revInfo.origUid)
 
-			if err = idShiftUtils.ShiftIdsWithChown(revInfo.path, uidOffset, gidOffset); err != nil {
+			if err = mgr.shiftIdsWithChown(revInfo.path, uidOffset, gidOffset); err != nil {
 				logrus.Warnf("failed to revert uid-shift of mount source at %s: %s", revInfo.path, err)
 			}
 
@@ -1192,7 +1192,7 @@ func (mgr *SysboxMgr) prepMounts(id string, uid, gid uint32, prepList []ipcLib.M
 
 				logrus.Infof("shifting uids at %s for %s (%d -> %d)", src, formatter.ContainerID{id}, origUid, uid)
 
-				if err = idShiftUtils.ShiftIdsWithChown(src, uidOffset, gidOffset); err != nil {
+				if err = mgr.shiftIdsWithChown(src, uidOffset, gidOffset); err != nil {
 					return fmt.Errorf("failed to shift uids via chown for mount source at %s: %s", src, err)
 				}
 
@@ -1400,7 +1400,7 @@ func (mgr *SysboxMgr) pause(id string) error {
 		logrus.Infof("pause %s: chown rootfs overlayfs upper layer at %s (%d -> %d)",
 			formatter.ContainerID{id}, info.rootfsOvfsUpper, info.uidMappings[0].HostID, 0)
 
-		if err := idShiftUtils.ShiftIdsWithChown(info.rootfsOvfsUpper, uidOffset, gidOffset); err != nil {
+		if err := mgr.shiftIdsWithChown(info.rootfsOvfsUpper, uidOffset, gidOffset); err != nil {
 			return err
 		}
 
@@ -1454,7 +1454,7 @@ func (mgr *SysboxMgr) resume(id string) error {
 		logrus.Infof("resume %s: chown rootfs overlayfs upper layer at %s (%d -> %d)",
 			formatter.ContainerID{id}, info.rootfsOvfsUpper, 0, info.uidMappings[0].HostID)
 
-		if err := idShiftUtils.ShiftIdsWithChown(info.rootfsOvfsUpper, uidOffset, gidOffset); err != nil {
+		if err := mgr.shiftIdsWithChown(info.rootfsOvfsUpper, uidOffset, gidOffset); err != nil {
 			return err
 		}
 
