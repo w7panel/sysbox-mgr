@@ -98,6 +98,11 @@ func main() {
 			Value: "/var/lib/sysbox",
 			Usage: "root directory for sysbox data store",
 		},
+		cli.StringFlag{
+			Name:  "mapping-mode",
+			Value: "standard-subid",
+			Usage: "user namespace mapping mode (standard-subid or nested-identity)",
+		},
 		cli.BoolFlag{
 			Name:  "disable-shiftfs",
 			Usage: "Disables Sysbox's use of the kernel's shiftfs module (present in Ubuntu/Debian); files may show with nobody:nogroup ownership inside the container; meant for testing. (default = false)",

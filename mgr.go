@@ -37,6 +37,7 @@ import (
 	intf "github.com/nestybox/sysbox-mgr/intf"
 	"github.com/nestybox/sysbox-mgr/rootfsCloner"
 	"github.com/nestybox/sysbox-mgr/shiftfsMgr"
+	"github.com/nestybox/sysbox-mgr/subidAlloc"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
@@ -87,6 +88,7 @@ type containerInfo struct {
 	rootfsOvfsUpper        string
 	rootfsOvfsUpperChowned bool
 	rmWatchPath            string // the path to watch to detect container removal
+	mappingMode            ipcLib.MappingMode
 }
 
 type mgrConfig struct {
@@ -105,6 +107,7 @@ type mgrConfig struct {
 	noShiftfsOnFuse         bool
 	relaxedReadOnly         bool
 	mountBinfmtMisc         bool
+	mappingMode             ipcLib.MappingMode
 }
 
 type SysboxMgr struct {
@@ -168,9 +171,22 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 		return nil, fmt.Errorf("failed to setup the sysbox work dirs: %v", err)
 	}
 
-	subidAlloc, err := setupSubidAlloc(ctx)
+	mappingMode, err := parseMappingMode(ctx.GlobalString("mapping-mode"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup subid allocator: %v", err)
+		return nil, err
+	}
+
+	var subidAllocator intf.SubidAlloc
+	if mappingMode == ipcLib.NestedIdentity {
+		if err := validateNestedIdentityEnvironment(); err != nil {
+			return nil, fmt.Errorf("nested-identity preflight failed: %v", err)
+		}
+		subidAllocator = subidAlloc.NewNestedIdentity()
+	} else {
+		subidAllocator, err = setupSubidAlloc(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to setup subid allocator: %v", err)
+		}
 	}
 
 	syncVolToRootfs := !ctx.GlobalBool("disable-inner-image-preload")
@@ -243,7 +259,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 	idMapMountOk := false
 	ovfsOnIDMapMountOk := false
 
-	if !ctx.GlobalBool("disable-idmapped-mount") {
+	if mappingMode == ipcLib.StandardSubid && !ctx.GlobalBool("disable-idmapped-mount") {
 		idMapMountOk, ovfsOnIDMapMountOk, err = checkIDMapMountSupport(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("ID-mapping check failed: %v", err)
@@ -258,7 +274,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 	shiftfsOk := false
 	shiftfsOnOvfsOk := false
 
-	if !ctx.GlobalBool("disable-shiftfs") {
+	if mappingMode == ipcLib.StandardSubid && !ctx.GlobalBool("disable-shiftfs") {
 		shiftfsModPresent, err = linuxUtils.KernelModSupported("shiftfs")
 		if err != nil {
 			return nil, fmt.Errorf("shiftfs kernel module check failed: %v", err)
@@ -320,6 +336,14 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 		noInnerImgPreload:       !syncVolToRootfs,
 		noShiftfsOnFuse:         ctx.GlobalBool("disable-shiftfs-on-fuse"),
 		mountBinfmtMisc:         mountBinfmtMisc,
+		mappingMode:             mappingMode,
+	}
+	if mappingMode == ipcLib.NestedIdentity {
+		mgrCfg.shiftfsOk = false
+		mgrCfg.shiftfsOnOverlayfsOk = false
+		mgrCfg.idMapMountOk = false
+		mgrCfg.overlayfsOnIDMapMountOk = false
+		mgrCfg.noRootfsCloning = true
 	}
 
 	if !mgrCfg.aliasDns {
@@ -388,7 +412,7 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 
 	mgr := &SysboxMgr{
 		mgrCfg:            mgrCfg,
-		subidAlloc:        subidAlloc,
+		subidAlloc:        subidAllocator,
 		dockerVolMgr:      dockerVolMgr,
 		kubeletVolMgr:     kubeletVolMgr,
 		k0sVolMgr:         k0sVolMgr,
@@ -507,6 +531,9 @@ func (mgr *SysboxMgr) Stop() error {
 
 // Registers a container with sysbox-mgr
 func (mgr *SysboxMgr) register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.ContainerConfig, error) {
+	if !regInfo.MappingMode.Valid() || regInfo.MappingMode != mgr.mgrCfg.mappingMode {
+		return nil, fmt.Errorf("mapping mode mismatch: runtime=%d manager=%d", regInfo.MappingMode, mgr.mgrCfg.mappingMode)
+	}
 
 	id := regInfo.Id
 	rootfs := regInfo.Rootfs
@@ -538,6 +565,7 @@ func (mgr *SysboxMgr) register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.Contai
 			rootfs:       rootfs,
 			rmWatchPath:  rmWatchPath,
 			rootfsOnOvfs: rootfsOnOvfs,
+			mappingMode:  regInfo.MappingMode,
 		}
 
 	} else {
@@ -627,6 +655,7 @@ func (mgr *SysboxMgr) register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.Contai
 		RootfsUidShiftType:      info.rootfsUidShiftType,
 		NoShiftfsOnFuse:         mgr.mgrCfg.noShiftfsOnFuse,
 		RelaxedReadOnly:         mgr.mgrCfg.relaxedReadOnly,
+		MappingMode:             info.mappingMode,
 	}
 
 	return containerCfg, nil
@@ -649,6 +678,9 @@ func (mgr *SysboxMgr) update(updateInfo *ipcLib.UpdateInfo) error {
 	if !found {
 		return fmt.Errorf("can't update container %s; not found in container table",
 			formatter.ContainerID{id})
+	}
+	if !updateInfo.MappingMode.Valid() || updateInfo.MappingMode != info.mappingMode {
+		return fmt.Errorf("mapping mode mismatch for container %s", formatter.ContainerID{id})
 	}
 
 	// If the container's rootfs is on overlayfs and it's ID-mapped, then
@@ -1229,6 +1261,9 @@ func (mgr *SysboxMgr) prepMounts(id string, uid, gid uint32, prepList []ipcLib.M
 }
 
 func (mgr *SysboxMgr) allocSubid(id string, size uint64) (uint32, uint32, error) {
+	if mgr.mgrCfg.mappingMode == ipcLib.NestedIdentity && size != subidRangeSize {
+		return 0, 0, fmt.Errorf("nested-identity requires an ID range of %d", subidRangeSize)
+	}
 
 	// get container info
 	mgr.ctLock.Lock()

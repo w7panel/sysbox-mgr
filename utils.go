@@ -29,6 +29,7 @@ import (
 	"sync"
 	"syscall"
 
+	ipcLib "github.com/nestybox/sysbox-ipc/sysboxMgrLib"
 	"github.com/nestybox/sysbox-libs/dockerUtils"
 	"github.com/nestybox/sysbox-libs/idMap"
 	"github.com/nestybox/sysbox-libs/linuxUtils"
@@ -49,7 +50,111 @@ import (
 
 const SHIFTFS_MAGIC int64 = 0x6a656a62
 
+const initialUsernsMapSize uint64 = 4294967295
+
 var progDeps = []string{"rsync", "modprobe", "iptables"}
+
+func parseMappingMode(mode string) (ipcLib.MappingMode, error) {
+	switch mode {
+	case "standard-subid":
+		return ipcLib.StandardSubid, nil
+	case "nested-identity":
+		return ipcLib.NestedIdentity, nil
+	default:
+		return ipcLib.StandardSubid, fmt.Errorf("invalid mapping mode %q", mode)
+	}
+}
+
+func validateNestedIdentityEnvironment() error {
+	uidMap, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil {
+		return err
+	}
+	gidMap, err := os.ReadFile("/proc/self/gid_map")
+	if err != nil {
+		return err
+	}
+	if isInitialUsernsMap(uidMap) {
+		return fmt.Errorf("nested-identity is not allowed in the initial user namespace")
+	}
+	if !mapCoversContainerRange(uidMap, subidRangeSize) || !mapCoversContainerRange(gidMap, subidRangeSize) {
+		return fmt.Errorf("parent uid/gid maps must cover IDs 0..%d", subidRangeSize-1)
+	}
+	status, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return err
+	}
+	if !hasEffectiveCaps(status, 6, 7, 21) { // CAP_SETGID, CAP_SETUID, CAP_SYS_ADMIN
+		return fmt.Errorf("nested-identity requires CAP_SETGID, CAP_SETUID, and CAP_SYS_ADMIN")
+	}
+	return nil
+}
+
+func parseIDMap(data []byte) [][3]uint64 {
+	var result [][3]uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		var entry [3]uint64
+		valid := true
+		for i, field := range fields {
+			value, err := strconv.ParseUint(field, 10, 64)
+			if err != nil {
+				valid = false
+				break
+			}
+			entry[i] = value
+		}
+		if valid {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func isInitialUsernsMap(data []byte) bool {
+	entries := parseIDMap(data)
+	return len(entries) == 1 && entries[0][0] == 0 && entries[0][1] == 0 && entries[0][2] == initialUsernsMapSize
+}
+
+func mapCoversContainerRange(data []byte, size uint64) bool {
+	entries := parseIDMap(data)
+	next := uint64(0)
+	for _, entry := range entries {
+		if entry[0] > next {
+			return false
+		}
+		end := entry[0] + entry[2]
+		if entry[0] <= next && end > next {
+			next = end
+			if next >= size {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasEffectiveCaps(status []byte, caps ...uint) bool {
+	for _, line := range strings.Split(string(status), "\n") {
+		if !strings.HasPrefix(line, "CapEff:") {
+			continue
+		}
+		value, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, "CapEff:")), 16, 64)
+		if err != nil {
+			return false
+		}
+		for _, capability := range caps {
+			if value&(uint64(1)<<capability) == 0 {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
 
 type exclusiveMntTable struct {
 	mounts map[string][]string // mount source -> list of containers using that mount source
@@ -245,7 +350,6 @@ func getSubidLimits(file string) ([]uint64, error) {
 }
 
 func setupSubidAlloc(ctx *cli.Context) (intf.SubidAlloc, error) {
-
 	// get subid min/max limits from login.defs (if any)
 	limits, err := getSubidLimits("/etc/login.defs")
 	if err != nil {

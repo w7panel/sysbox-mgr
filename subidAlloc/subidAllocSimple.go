@@ -100,6 +100,12 @@ func New(userName string, subuidSrc, subgidSrc io.Reader) (intf.SubidAlloc, erro
 	return sub, nil
 }
 
+// NewNestedIdentity returns an allocator for child user namespaces whose IDs
+// map one-to-one into the current (non-initial) user namespace.
+func NewNestedIdentity() intf.SubidAlloc {
+	return &subidAlloc{idRange: user.SubID{SubID: 0, Count: int64(allocBlkSize)}}
+}
+
 func getCommonRanges(uidRanges, gidRanges []user.SubID) []user.SubID {
 
 	uidRangeSet := mapset.NewSet()

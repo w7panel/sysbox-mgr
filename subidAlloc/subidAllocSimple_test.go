@@ -32,6 +32,18 @@ type allocTest struct {
 	wantErr string
 }
 
+func TestNestedIdentityAllocator(t *testing.T) {
+	allocator := NewNestedIdentity()
+	uid, gid, err := allocator.Alloc("a", 65536)
+	if err != nil || uid != 0 || gid != 0 {
+		t.Fatalf("nested identity allocation = %d:%d, %v", uid, gid, err)
+	}
+	uid2, gid2, err := allocator.Alloc("b", 65536)
+	if err != nil || uid2 != uid || gid2 != gid {
+		t.Fatalf("nested identity mapping was not reusable: %d:%d, %v", uid2, gid2, err)
+	}
+}
+
 func testAlloc(t *testing.T, subidAlloc intf.SubidAlloc, tests []allocTest) {
 
 	for _, test := range tests {
