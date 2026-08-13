@@ -60,9 +60,26 @@ func parseMappingMode(mode string) (ipcLib.MappingMode, error) {
 		return ipcLib.StandardSubid, nil
 	case "nested-identity":
 		return ipcLib.NestedIdentity, nil
+	case "auto":
+		// Auto is resolved during manager initialization. Keep the wire
+		// contract explicit by returning the standard mode until fallback.
+		return ipcLib.StandardSubid, nil
 	default:
 		return ipcLib.StandardSubid, fmt.Errorf("invalid mapping mode %q", mode)
 	}
+}
+
+func isNestedIdentityEnvironment() bool {
+	uidMap, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil || isInitialUsernsMap(uidMap) {
+		return false
+	}
+	gidMap, err := os.ReadFile("/proc/self/gid_map")
+	if err != nil || !mapCoversContainerRange(uidMap, subidRangeSize) ||
+		!mapCoversContainerRange(gidMap, subidRangeSize) {
+		return false
+	}
+	return true
 }
 
 func validateNestedIdentityEnvironment() error {
@@ -350,6 +367,12 @@ func getSubidLimits(file string) ([]uint64, error) {
 }
 
 func setupSubidAlloc(ctx *cli.Context) (intf.SubidAlloc, error) {
+	// A manager inside another user namespace cannot safely mutate the L1
+	// sub-ID files: those files are not authoritative for the nested mapping
+	// and may not even be writable. Let the caller select nested-identity.
+	if isNestedIdentityEnvironment() {
+		return nil, fmt.Errorf("sub-ID allocation unavailable in non-initial user namespace")
+	}
 	// get subid min/max limits from login.defs (if any)
 	limits, err := getSubidLimits("/etc/login.defs")
 	if err != nil {
@@ -605,6 +628,9 @@ func setupRunDir() error {
 }
 
 func setupWorkDirs() error {
+	if !filepath.IsAbs(sysboxLibDir) || sysboxLibDir == "/" {
+		return fmt.Errorf("sysbox data root must be a non-root absolute path: %s", sysboxLibDir)
+	}
 
 	// Cleanup work dirs in case they were left unclean from a prior session (e.g., if
 	// sysbox was running and stopped with SIGKILL)
@@ -620,8 +646,20 @@ func setupWorkDirs() error {
 	if err := os.MkdirAll(sysboxLibDir, 0710); err != nil {
 		return fmt.Errorf("failed to create %s: %s", sysboxLibDir, err)
 	}
-	if err := os.Chown(sysboxLibDir, int(0), int(0)); err != nil {
-		return fmt.Errorf("failed to chown %s: %s", sysboxLibDir, err)
+	resolved, err := filepath.EvalSymlinks(sysboxLibDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve sysbox data root %s: %s", sysboxLibDir, err)
+	}
+	if resolved == "/" || !filepath.IsAbs(resolved) {
+		return fmt.Errorf("invalid resolved sysbox data root: %s", resolved)
+	}
+	// In a nested user namespace uid/gid 0 are L1-local. The directory is
+	// already created by the manager with L1 credentials; attempting to chown
+	// it to an initial-userns owner breaks nested deployments.
+	if !isNestedIdentityEnvironment() {
+		if err := os.Chown(sysboxLibDir, int(0), int(0)); err != nil {
+			return fmt.Errorf("failed to chown %s: %s", sysboxLibDir, err)
+		}
 	}
 
 	return nil

@@ -100,8 +100,8 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:  "mapping-mode",
-			Value: "standard-subid",
-			Usage: "user namespace mapping mode (standard-subid or nested-identity)",
+			Value: "auto",
+			Usage: "user namespace mapping mode (auto, standard-subid, or nested-identity)",
 		},
 		cli.BoolFlag{
 			Name:  "disable-shiftfs",

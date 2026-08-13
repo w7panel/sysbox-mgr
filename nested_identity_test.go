@@ -12,8 +12,8 @@ func TestParseMappingMode(t *testing.T) {
 	if _, err := parseMappingMode("nested-identity"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseMappingMode("auto"); err == nil {
-		t.Fatal("invalid mapping mode accepted")
+	if _, err := parseMappingMode("auto"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -26,6 +26,13 @@ func TestNestedIdentityMapValidation(t *testing.T) {
 	}
 	if mapCoversContainerRange([]byte("0 309788672 65535\n"), 65536) {
 		t.Fatal("short nested map accepted")
+	}
+}
+
+func TestAutoMappingModeIsExplicitOnWire(t *testing.T) {
+	mode, err := parseMappingMode("auto")
+	if err != nil || !mode.Valid() {
+		t.Fatalf("auto mode must resolve to a valid wire mode: %v (%d)", err, mode)
 	}
 }
 

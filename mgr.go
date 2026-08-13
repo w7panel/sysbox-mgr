@@ -171,7 +171,8 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 		return nil, fmt.Errorf("failed to setup the sysbox work dirs: %v", err)
 	}
 
-	mappingMode, err := parseMappingMode(ctx.GlobalString("mapping-mode"))
+	requestedMappingMode := ctx.GlobalString("mapping-mode")
+	mappingMode, err := parseMappingMode(requestedMappingMode)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +186,18 @@ func newSysboxMgr(ctx *cli.Context) (*SysboxMgr, error) {
 	} else {
 		subidAllocator, err = setupSubidAlloc(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to setup subid allocator: %v", err)
+			// In auto mode, a non-initial user namespace can safely use the
+			// identity mapping even when L1 cannot access /etc/subuid.
+			if ctx.GlobalString("mapping-mode") == "auto" && isNestedIdentityEnvironment() {
+				logrus.Warnf("standard sub-ID setup failed (%v); enabling nested-identity", err)
+				mappingMode = ipcLib.NestedIdentity
+				if err := validateNestedIdentityEnvironment(); err != nil {
+					return nil, fmt.Errorf("nested-identity preflight failed: %v", err)
+				}
+				subidAllocator = subidAlloc.NewNestedIdentity()
+			} else {
+				return nil, fmt.Errorf("failed to setup subid allocator: %v", err)
+			}
 		}
 	}
 
