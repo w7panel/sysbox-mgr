@@ -603,7 +603,7 @@ func (mgr *SysboxMgr) register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.Contai
 	var sameNetns []string
 
 	if netns != "" {
-		netnsInode, err := getInode(netns)
+		netnsInode, err := getNetnsInode(netns, mgr.mgrCfg.mappingMode == ipcLib.NestedIdentity)
 		if err != nil {
 			mgr.ctLock.Unlock()
 			return nil, fmt.Errorf("unable to get inode for netns %s: %s", netns, err)
@@ -709,7 +709,7 @@ func (mgr *SysboxMgr) update(updateInfo *ipcLib.UpdateInfo) error {
 	}
 
 	if netns != "" {
-		netnsInode, err := getInode(netns)
+		netnsInode, err := getNetnsInode(netns, mgr.mgrCfg.mappingMode == ipcLib.NestedIdentity)
 		if err != nil {
 			return fmt.Errorf("can't update container %s: unable to get inode for netns %s: %s",
 				formatter.ContainerID{id}, netns, err)

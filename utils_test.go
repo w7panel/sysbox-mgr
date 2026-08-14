@@ -39,6 +39,37 @@ func compareSubidRanges(t *testing.T, want, got []user.SubID) {
 	}
 }
 
+func TestGetNetnsInodeAt(t *testing.T) {
+	l1Root := t.TempDir()
+	netnsDir := filepath.Join(l1Root, "var/run/netns")
+	if err := os.MkdirAll(netnsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	handle := filepath.Join(netnsDir, "cni-test")
+	if err := os.WriteFile(handle, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := getInode(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := getNetnsInodeAt("/var/run/netns/cni-test", true, l1Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("nested netns inode mismatch: got %d, want %d", got, want)
+	}
+
+	if _, err := getNetnsInodeAt("/tmp/cni-test", true, l1Root); err == nil {
+		t.Fatal("nested netns fallback accepted a path outside /run/netns")
+	}
+	if _, err := getNetnsInodeAt("/var/run/netns/cni-test", false, l1Root); err == nil {
+		t.Fatal("standard mode unexpectedly used the L1 root fallback")
+	}
+}
+
 func TestAllocSubidRange(t *testing.T) {
 
 	var subID, got, want []user.SubID

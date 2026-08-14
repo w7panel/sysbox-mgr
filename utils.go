@@ -428,6 +428,7 @@ func setupDockerVolMgr(syncToRootfs bool) (intf.VolMgr, error) {
 		"tmpfs":     unix.TMPFS_MAGIC,
 		"overlayfs": unix.OVERLAYFS_SUPER_MAGIC,
 		"shiftfs":   SHIFTFS_MAGIC,
+		"fuse":      unix.FUSE_SUPER_MAGIC,
 	}
 
 	if err := syscall.Statfs(hostDir, &statfs); err != nil {
@@ -1052,6 +1053,30 @@ func getInode(file string) (uint64, error) {
 	}
 
 	return st.Ino, nil
+}
+
+// getNetnsInode returns the inode of a CRI network-namespace handle. When the
+// nested manager is launched by a hostPID agent, it has the L1 PID namespace
+// but a separate mount namespace. In that case CNI's transient /run/netns bind
+// mount is visible through the L1 init process root, not through the agent's
+// own root. Keep this fallback restricted to the CNI-managed directory.
+func getNetnsInode(file string, nestedIdentity bool) (uint64, error) {
+	return getNetnsInodeAt(file, nestedIdentity, "/proc/1/root")
+}
+
+func getNetnsInodeAt(file string, nestedIdentity bool, l1Root string) (uint64, error) {
+	inode, err := getInode(file)
+	if err == nil || !nestedIdentity {
+		return inode, err
+	}
+
+	clean := filepath.Clean(file)
+	dir := filepath.Dir(clean)
+	if dir != "/run/netns" && dir != "/var/run/netns" {
+		return 0, err
+	}
+
+	return getInode(filepath.Clean(l1Root) + clean)
 }
 
 func checkIDMapMountSupport(ctx *cli.Context) (bool, bool, error) {
