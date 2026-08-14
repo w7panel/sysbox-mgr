@@ -708,16 +708,24 @@ func (mgr *SysboxMgr) update(updateInfo *ipcLib.UpdateInfo) error {
 		info.rootfsOvfsUpperChowned = true
 	}
 
-	if info.netns == "" && netns != "" {
+	if netns != "" {
 		netnsInode, err := getInode(netns)
 		if err != nil {
 			return fmt.Errorf("can't update container %s: unable to get inode for netns %s: %s",
 				formatter.ContainerID{id}, netns, err)
 		}
 
-		if _, err := mgr.trackNetns(id, netnsInode); err != nil {
-			return fmt.Errorf("can't update container %s: failed to track netns: %s",
-				formatter.ContainerID{id}, err)
+		if info.netnsInode != netnsInode {
+			if info.netnsInode != 0 {
+				if err := mgr.untrackNetns(id, info.netnsInode); err != nil {
+					return fmt.Errorf("can't update container %s: failed to untrack old netns: %s",
+						formatter.ContainerID{id}, err)
+				}
+			}
+			if _, err := mgr.trackNetns(id, netnsInode); err != nil {
+				return fmt.Errorf("can't update container %s: failed to track netns: %s",
+					formatter.ContainerID{id}, err)
+			}
 		}
 		info.netns = netns
 		info.netnsInode = netnsInode
